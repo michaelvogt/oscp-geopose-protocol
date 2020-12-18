@@ -7,6 +7,7 @@ from collections import namedtuple
 from datetime import datetime
 
 import h3 as h3
+import piexif as piexif
 import requests
 
 # Latitude and longitude as named tuple
@@ -36,6 +37,7 @@ class Menu:
             '1': ('Get objects from AC provider', self.get_objects_from_ac),
             '2': ('Get geopose by image from AC provider', self.get_geopose_from_ac),
             '3': ('Get geopose by image from AC provider with near objects', self.get_geopose_objs_from_ac),
+            '4': ('Get geopose with ecef by image from AC provider with near objects',self.get_ecef_geopose_objs_from_ac),
             '0': ('Quit', self.quit)
         }
 
@@ -217,6 +219,22 @@ class Menu:
             print("Error getting geopose from AC scd service\n")
             return None
 
+    def __post_geopose_with_objects_and_ecef(self, ac_url, req_body):
+        """
+        Access SCD service geopose
+        :param ac_url:
+        :param req_body:
+        :return:
+        """
+        try:
+            response = requests.post(url=f"{ac_url}/scrs/geopose_objs",
+                                     headers={'Content-Type': 'application/json'},
+                                     data=json.dumps(req_body))
+            return json.dumps(response.json(), indent=4)
+        except:
+            print("Error getting geopose from AC scd service\n")
+            return None
+
     def __get_precise_coords(self, response):
         """
         Get lat and lon from geopose response
@@ -230,6 +248,49 @@ class Menu:
             return precise_lat, precise_lon
         except:
             print('Error reading coords from geopose reponse')
+
+    def __to_decimals(self, coordinates):
+        """
+        Convert lat and lon from exif to decimals
+        :param coordinates:
+        :return:
+        """
+        decimals = []
+        for coordinate in coordinates:
+            decimal: float = (coordinate[0][0] / coordinate[0][1]) + \
+                             ((coordinate[1][0] / coordinate[1][1]) / 60) + \
+                             ((coordinate[2][0] / coordinate[2][1]) / 3600)
+            decimals.append(decimal)
+        return decimals
+
+    def __get_exif_from_img(self, imagefile):
+        """
+        Try to read exif from image file
+        :return:
+        """
+        try:
+            coordinates = []
+            exif = piexif.load(imagefile)
+            lat = exif["GPS"][piexif.GPSIFD.GPSLatitude]
+            lon = exif["GPS"][piexif.GPSIFD.GPSLongitude]
+            lat_ref = str(exif["GPS"][piexif.GPSIFD.GPSLatitudeRef], 'utf-8')
+            lon_ref = str(exif["GPS"][piexif.GPSIFD.GPSLongitudeRef], 'utf-8')
+            coordinates.append(lat)
+            coordinates.append(lon)
+
+            decimals = self.__to_decimals(coordinates)
+            lat_normalized = round(decimals[0], 6)
+            lon_normalized = round(decimals[1], 6)
+
+            if lat_ref != 'N':
+                lat_normalized = -lat_normalized
+            if lon_ref != 'E':
+                lon_normalized = -lon_normalized
+            return lat_normalized, lon_normalized
+        except:
+            print('Error reading latitude and longitude from imagefile EXIF data. '
+                  'Please, enter latitude and longitude manually')
+            return None, None
 
     def display_menu(self):
         """
@@ -297,8 +358,11 @@ class Menu:
         """
         img_file_name = (input(
             "Please, enter image filename in current directory (default: seattle.jpg): ") or "seattle.jpg")
-        lat = (input(f"Please, enter latitude (default: 47.611550): ") or 47.611550)
-        lon = (input(f"Please, enter longitude (default: -122.337056): ") or -122.337056)
+        lat_from_img, lon_from_img = self.__get_exif_from_img(img_file_name)
+        lat_from_img = lat_from_img or "N/A"
+        lon_from_img = lon_from_img or "N/A"
+        lat = (input(f"Please, enter latitude (default: {lat_from_img}): ") or lat_from_img)
+        lon = (input(f"Please, enter longitude (default: {lon_from_img}): ") or lon_from_img)
         h3_index = self.__create_h3_from_lat_lon(lat, lon)
         if h3_index is None:
             return
@@ -315,8 +379,9 @@ class Menu:
         if response is None:
             return
 
-        # Method result
+        # Method result.
         # Quaternion in response is in ARKit system (xyzw)
+        # Geo-pose rotates AR-object's frame (Y up, -Z forward direction) to North-aligned AR-world frame (X East, Y up, Z South).
         print(response)
 
     def get_geopose_objs_from_ac(self):
@@ -326,8 +391,11 @@ class Menu:
         """
         img_file_name = (input(
             "Please, enter image filename in current directory (default: seattle.jpg): ") or "seattle.jpg")
-        lat = (input(f"Please, enter latitude (default: 47.611550): ") or 47.611550)
-        lon = (input(f"Please, enter longitude (default: -122.337056): ") or -122.337056)
+        lat_from_img, lon_from_img = self.__get_exif_from_img(img_file_name)
+        lat_from_img = lat_from_img or "N/A"
+        lon_from_img = lon_from_img or "N/A"
+        lat = (input(f"Please, enter latitude (default: {lat_from_img}): ") or lat_from_img)
+        lon = (input(f"Please, enter longitude (default: {lon_from_img}): ") or lon_from_img)
         h3_index = self.__create_h3_from_lat_lon(lat, lon)
         if h3_index is None:
             return
@@ -356,6 +424,40 @@ class Menu:
         if response_with_objects is None:
             return
         print(response_with_objects)
+
+    def get_ecef_geopose_objs_from_ac(self):
+        """
+        Menu item
+        :return:
+        """
+        img_file_name = (input(
+            "Please, enter image filename in current directory (default: seattle.jpg): ") or "seattle.jpg")
+        lat_from_img, lon_from_img = self.__get_exif_from_img(img_file_name)
+        lat_from_img = lat_from_img or "N/A"
+        lon_from_img = lon_from_img or "N/A"
+        lat = (input(f"Please, enter latitude (default: {lat_from_img}): ") or lat_from_img)
+        lon = (input(f"Please, enter longitude (default: {lon_from_img}): ") or lon_from_img)
+        h3_index = self.__create_h3_from_lat_lon(lat, lon)
+        if h3_index is None:
+            return
+        country = (input("Please, enter the country for localization (default: US): ") or "US")
+        ac_url = self.__get_ac_url_with_id(country, h3_index)  # http://127.0.0.1:5000/ - for debug purpose
+        if ac_url is None:
+            return
+        print("Found service provider from SSD: ", ac_url)
+        img_file_base64_string = self.__load_image(img_file_name)
+        if img_file_base64_string is None:
+            return
+        req_template = self.__create_geopose_request(img_file_base64_string, lat, lon)
+        response = self.__post_geopose_with_objects_and_ecef(ac_url, req_template)
+        if response is None:
+            return
+
+        # Method result.
+        # Geo-pose represents object's frame (Z up, X forward direction) in ECEF coordinate system,
+        # so that it is correctly oriented with respect to North direction and vertical axis and placed about WGS84
+        # ellipsoid level.
+        print(response)
 
     def quit(self):
         """
